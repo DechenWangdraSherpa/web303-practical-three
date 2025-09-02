@@ -1,0 +1,63 @@
+services:
+  consul:
+    image: hashicorp/consul:latest
+    container_name: consul
+    ports:
+      - "8500:8500"
+    command: "agent -dev -client=0.0.0.0 -ui"
+
+  users-db:
+    image: postgres:13
+    container_name: users-db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: users_db
+    ports:
+      - "5432:5432" # Exposing for local inspection
+    volumes:
+      - users_data:/var/lib/postgresql/data
+
+  products-db:
+    image: postgres:13
+    container_name: products-db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: products_db
+    ports:
+      - "5433:5432" # Mapping to a different host port
+    volumes:
+      - products_data:/var/lib/postgresql/data
+
+  users-service:
+    build: ./services/users-service
+    container_name: users-service
+    ports:
+      - "50051:50051"
+    depends_on:
+      - consul
+      - users-db
+
+  products-service:
+    build: ./services/products-service
+    container_name: products-service
+    ports:
+      - "50052:50052"
+    depends_on:
+      - consul
+      - products-db
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - consul
+      - users-service
+      - products-service
+
+volumes:
+  users_data:
+  products_data:
