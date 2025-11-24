@@ -1,4 +1,3 @@
-// services/products-service/main.go
 package main
 
 import (
@@ -7,19 +6,21 @@ import (
     "log"
     "net"
     "os"
+    "time"
 
     "google.golang.org/grpc"
+    "google.golang.org/grpc/health"
+    "google.golang.org/grpc/health/grpc_health_v1"
     "gorm.io/driver/postgres"
     "gorm.io/gorm"
 
-    pb "practical-three/proto/gen"
+    pb "products-service/proto/gen/proto"
     consulapi "github.com/hashicorp/consul/api"
 )
 
 const serviceName = "products-service"
 const servicePort = 50052
 
-// GORM model for our Product
 type Product struct {
     gorm.Model
     Name  string
@@ -48,15 +49,14 @@ func (s *server) GetProduct(ctx context.Context, req *pb.GetProductRequest) (*pb
 }
 
 func main() {
-    // 1. Connect to the database
-    dsn := "host=products-db user=user password=password dbname=products_db port=5432 sslmode=disable"
-    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-    if err != nil {
-        log.Fatalf("Failed to connect to database: %v", err)
-    }
+    // Wait for database to be ready
+    time.Sleep(10 * time.Second)
+
+    // Connect to database with retry logic
+    db := connectToDatabaseWithRetry()
     db.AutoMigrate(&Product{})
 
-    // 2. Start the gRPC server
+    // Start gRPC server
     lis, err := net.Listen("tcp", fmt.Sprintf(":%d", servicePort))
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
@@ -64,7 +64,12 @@ func main() {
     s := grpc.NewServer()
     pb.RegisterProductServiceServer(s, &server{db: db})
 
-    // 3. Register with Consul
+    // Register health check
+    healthServer := health.NewServer()
+    grpc_health_v1.RegisterHealthServer(s, healthServer)
+    healthServer.SetServingStatus("products.ProductService", grpc_health_v1.HealthCheckResponse_SERVING)
+
+    // Register with Consul
     if err := registerServiceWithConsul(); err != nil {
         log.Fatalf("Failed to register with Consul: %v", err)
     }
@@ -75,24 +80,57 @@ func main() {
     }
 }
 
+func connectToDatabaseWithRetry() *gorm.DB {
+    dsn := "host=products-db user=user password=password dbname=products_db port=5432 sslmode=disable"
+
+    var db *gorm.DB
+    var err error
+
+    for i := 0; i < 30; i++ {
+        db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+        if err == nil {
+            log.Println("Successfully connected to database")
+            break
+        }
+
+        log.Printf("Failed to connect to database (attempt %d/30): %v", i+1, err)
+        time.Sleep(10 * time.Second)
+    }
+
+    if err != nil {
+        log.Fatalf("Could not connect to database after 30 attempts: %v", err)
+    }
+
+    return db
+}
+
 func registerServiceWithConsul() error {
     config := consulapi.DefaultConfig()
+    if addr := os.Getenv("CONSUL_HTTP_ADDR"); addr != "" {
+        config.Address = addr
+    }
+
     consul, err := consulapi.NewClient(config)
     if err != nil {
         return err
     }
 
-    hostname, err := os.Hostname()
-    if err != nil {
-        return err
-    }
-
+    // Use the service name as the address within the Docker network
     registration := &consulapi.AgentServiceRegistration{
-        ID:      fmt.Sprintf("%s-%s", serviceName, hostname),
+        ID:      serviceName,
         Name:    serviceName,
         Port:    servicePort,
-        Address: hostname,
+        Address: serviceName,
+        Check: &consulapi.AgentServiceCheck{
+            GRPC:                           fmt.Sprintf("%s:%d", serviceName, servicePort),
+            Interval:                       "10s",
+            DeregisterCriticalServiceAfter: "30s",
+        },
     }
 
-    return consul.Agent().ServiceRegister(registration)
+    err = consul.Agent().ServiceRegister(registration)
+    if err == nil {
+        log.Printf("Successfully registered %s with Consul at %s:%d", serviceName, serviceName, servicePort)
+    }
+    return err
 }

@@ -1,14 +1,23 @@
-# api-gateway/Dockerfile
-FROM golang:1.24.2-alpine AS builder
+FROM golang:alpine AS builder
+
 WORKDIR /app
-COPY go.mod ./
-COPY go.sum ./
+
+# Copy proto files first
+COPY proto/ ./proto/
+COPY go.mod go.sum ./
 RUN go mod download
+
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./main.go
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./main.go
 
 FROM alpine:latest
-WORKDIR /app
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+
 COPY --from=builder /app/server .
+
 EXPOSE 8080
-CMD ["/app/server"]
+
+CMD ["./server"]

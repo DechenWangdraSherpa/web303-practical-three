@@ -5,6 +5,8 @@ services:
     ports:
       - "8500:8500"
     command: "agent -dev -client=0.0.0.0 -ui"
+    networks:
+      - microservices
 
   users-db:
     image: postgres:13
@@ -14,9 +16,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: users_db
     ports:
-      - "5432:5432" # Exposing for local inspection
+      - "5432:5432"
     volumes:
       - users_data:/var/lib/postgresql/data
+    networks:
+      - microservices
 
   products-db:
     image: postgres:13
@@ -26,9 +30,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: products_db
     ports:
-      - "5433:5432" # Mapping to a different host port
+      - "5433:5432"
     volumes:
       - products_data:/var/lib/postgresql/data
+    networks:
+      - microservices
 
   users-service:
     build: ./services/users-service
@@ -38,6 +44,10 @@ services:
     depends_on:
       - consul
       - users-db
+    environment:
+      - CONSUL_HTTP_ADDR=consul:8500
+    networks:
+      - microservices
 
   products-service:
     build: ./services/products-service
@@ -47,6 +57,10 @@ services:
     depends_on:
       - consul
       - products-db
+    environment:
+      - CONSUL_HTTP_ADDR=consul:8500
+    networks:
+      - microservices
 
   api-gateway:
     build: ./api-gateway
@@ -57,7 +71,15 @@ services:
       - consul
       - users-service
       - products-service
+    environment:
+      - CONSUL_HTTP_ADDR=consul:8500
+    networks:
+      - microservices
 
 volumes:
   users_data:
   products_data:
+
+networks:
+  microservices:
+    driver: bridge
